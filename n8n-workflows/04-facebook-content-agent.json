@@ -1,0 +1,113 @@
+{
+  "name": "Facebook Group Content Generator",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "id": "daily-trigger",
+      "name": "Daily at 9 AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Rotate through post types to keep content varied\nconst postTypes = [\n  { type: 'tip', prompt: 'Write a helpful Facebook post for Tampa Bay homeowners about hurricane window preparation. Be genuinely helpful. 3-4 sentences. Conversational tone. End with a soft CTA to comment if they have questions. No hashtags yet.' },\n  { type: 'savings', prompt: 'Write a helpful Facebook post for Tampa Bay homeowners about how energy efficient windows can lower electric bills in Florida heat. Mention specific savings (15-30%). 3-4 sentences. Include a question to drive comments.' },\n  { type: 'seasonal', prompt: 'Write a timely Facebook post for Tampa Bay homeowners about preparing windows for hurricane season. Practical tips. 3-4 sentences. Friendly tone.' },\n  { type: 'faq', prompt: 'Write a Facebook post answering a common question Tampa Bay homeowners have about window replacement — either about permits, cost, timeline, or insurance discounts. Educational tone. 3-4 sentences.' },\n  { type: 'social_proof', prompt: 'Write a Facebook post in the voice of a satisfied Tampa Bay homeowner who just got new windows. First person, authentic, mentions specific benefit (cooler home, lower bill, peace of mind in storms). 3-4 sentences. No fake names.' },\n  { type: 'before_after', prompt: 'Write a Facebook post describing the transformation of a Tampa Bay home after window replacement — drafty old windows to new energy efficient ones. Paint a picture. 3-4 sentences. Encouraging tone.' }\n];\n\nconst today = new Date().getDay(); // 0-6\nconst postType = postTypes[today % postTypes.length];\n\n// Hashtags to append\nconst hashtags = [\n  '#TampaBay #HomeImprovement #Windows',\n  '#Tampa #HurricanePrep #FloridaHome',\n  '#StPete #HomeUpgrade #EnergyEfficient',\n  '#TampaBayArea #WindowReplacement #FloridaLiving',\n  '#Clearwater #HurricaneWindows #HomeOwner'\n];\nconst tagSet = hashtags[Math.floor(Math.random() * hashtags.length)];\n\nreturn [{ json: { ...postType, hashtags: tagSet, date: new Date().toLocaleDateString() } }];"
+      },
+      "id": "pick-post-type",
+      "name": "Pick Post Type",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "Authorization", "value": "Bearer YOUR_GROQ_API_KEY" }
+          ]
+        },
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": "={\n  \"model\": \"meta-llama/llama-4-scout-17b-16e-instruct\",\n  \"max_tokens\": 300,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You write helpful, authentic Facebook posts for Tampa Bay homeowner groups. Never sound like an ad. Sound like a helpful neighbor or community member who knows about windows. Never mention a company name. Always be genuine and educational first.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"{{ $json.prompt }}\"\n    }\n  ]\n}"
+      },
+      "id": "generate-post",
+      "name": "Generate Post (Groq)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst meta = $('Pick Post Type').first().json;\nconst postText = response.choices[0].message.content.trim();\nconst fullPost = `${postText}\\n\\n${meta.hashtags}`;\n\nreturn [{\n  json: {\n    type: meta.type,\n    date: meta.date,\n    post: fullPost,\n    char_count: fullPost.length,\n    ready: true\n  }\n}];"
+      },
+      "id": "format-post",
+      "name": "Format Post",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 300]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "mode": "url",
+          "value": "YOUR_GOOGLE_SHEET_URL"
+        },
+        "sheetName": "Facebook Queue",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Date": "={{ $json.date }}",
+            "Type": "={{ $json.type }}",
+            "Post Content": "={{ $json.post }}",
+            "Char Count": "={{ $json.char_count }}",
+            "Status": "READY — Copy to PilotPoster"
+          }
+        },
+        "options": {}
+      },
+      "id": "log-to-sheets",
+      "name": "Log to Facebook Queue",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1200, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-cred",
+          "name": "Google Sheets"
+        }
+      },
+      "notes": "Content is logged to a Facebook Queue tab. Copy posts into PilotPoster Chrome extension for automated group posting."
+    }
+  ],
+  "connections": {
+    "Daily at 9 AM": {
+      "main": [[{ "node": "Pick Post Type", "type": "main", "index": 0 }]]
+    },
+    "Pick Post Type": {
+      "main": [[{ "node": "Generate Post (Groq)", "type": "main", "index": 0 }]]
+    },
+    "Generate Post (Groq)": {
+      "main": [[{ "node": "Format Post", "type": "main", "index": 0 }]]
+    },
+    "Format Post": {
+      "main": [[{ "node": "Log to Facebook Queue", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "saveManualExecutions": true },
+  "tags": [{ "name": "social-media" }]
+}

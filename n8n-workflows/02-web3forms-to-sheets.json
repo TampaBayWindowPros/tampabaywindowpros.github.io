@@ -1,0 +1,96 @@
+{
+  "name": "Web3Forms → Lead Dashboard",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "web3forms-lead",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "w3f-webhook",
+      "name": "Web3Forms Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "notes": "Set this webhook URL in Web3Forms dashboard as notification URL"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalize Web3Forms payload to standard lead format\nconst body = $input.first().json;\n\n// Web3Forms sends fields as top-level keys\nconst lead = {\n  name: body.name || body.full_name || '',\n  phone: body.phone || body.telephone || '',\n  email: body.email || '',\n  address: body.address || '',\n  service: body.service || body.service_type || '',\n  timeline: body.timeline || '',\n  notes: body.notes || body.message || '',\n  city: body.city || extractCity(body.address || ''),\n  source: 'landing-page-form',\n  form_page: body.subject || '',\n  timestamp: new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })\n};\n\nfunction extractCity(address) {\n  const cities = ['Tampa','St. Petersburg','Clearwater','Brandon','Largo','Riverview',\n    'Wesley Chapel','Lutz','New Tampa','Palm Harbor','Dunedin','Safety Harbor',\n    'Land O Lakes','Apollo Beach','Sun City Center'];\n  for (const city of cities) {\n    if (address.toLowerCase().includes(city.toLowerCase())) return city;\n  }\n  return 'Tampa Bay';\n}\n\n// Score the lead\nlet score = 0;\nconst tl = lead.timeline.toLowerCase();\nif (tl.includes('asap')) score += 40;\nelse if (tl.includes('month') && !tl.includes('3')) score += 25;\nelse if (tl.includes('1-3')) score += 10;\n\nconst svc = lead.service.toLowerCase();\nif (svc.includes('hurricane') || svc.includes('impact')) score += 30;\nelse if (svc.includes('full') || svc.includes('whole')) score += 30;\nelse if (svc.includes('energy')) score += 20;\nelse if (svc.includes('commercial')) score += 25;\nelse if (svc.includes('single')) score += 10;\nelse if (svc.includes('repair')) score += 5;\nelse score += 15;\n\nif (lead.phone.length > 7) score += 15;\nif (lead.email.includes('@')) score += 10;\nif (lead.address.length > 3) score += 5;\nscore += 5; // form source bonus\n\nconst rating = score >= 70 ? 'HOT' : score >= 40 ? 'WARM' : 'COLD';\n\nreturn [{ json: { ...lead, score, rating } }];"
+      },
+      "id": "normalize-score",
+      "name": "Normalize & Score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "mode": "url",
+          "value": "YOUR_GOOGLE_SHEET_URL"
+        },
+        "sheetName": "Sheet1",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Timestamp": "={{ $json.timestamp }}",
+            "Name": "={{ $json.name }}",
+            "Phone": "={{ $json.phone }}",
+            "Email": "={{ $json.email }}",
+            "Address/City": "={{ $json.address || $json.city }}",
+            "Service": "={{ $json.service }}",
+            "Timeline": "={{ $json.timeline }}",
+            "Source": "={{ $json.source }}",
+            "Notes": "={{ $json.notes }}",
+            "Score": "={{ $json.score }}",
+            "Rating": "={{ $json.rating }}",
+            "Follow-Up Status": "",
+            "Call Notes": "",
+            "HOT/WARM/COLD": "={{ $json.rating }}"
+          }
+        },
+        "options": {
+          "valueInputMode": "USER_ENTERED"
+        }
+      },
+      "id": "append-sheets",
+      "name": "Append to Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [720, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-cred",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "OK"
+      },
+      "id": "respond-ok",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [960, 300]
+    }
+  ],
+  "connections": {
+    "Web3Forms Webhook": {
+      "main": [[{ "node": "Normalize & Score", "type": "main", "index": 0 }]]
+    },
+    "Normalize & Score": {
+      "main": [[{ "node": "Append to Sheets", "type": "main", "index": 0 }]]
+    },
+    "Append to Sheets": {
+      "main": [[{ "node": "Respond", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "saveManualExecutions": true },
+  "tags": [{ "name": "window-leads" }]
+}

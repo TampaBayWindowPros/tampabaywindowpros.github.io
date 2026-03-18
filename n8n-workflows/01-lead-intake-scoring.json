@@ -1,0 +1,148 @@
+{
+  "name": "Window Lead Intake & Scoring",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "window-lead",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-intake",
+      "name": "Lead Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── LEAD SCORING ENGINE ──────────────────────────────────────────\nconst lead = $input.first().json;\n\nlet score = 0;\nlet scoreNotes = [];\n\n// Timeline scoring\nconst timeline = (lead.timeline || '').toLowerCase();\nif (timeline.includes('asap') || timeline.includes('immediately') || timeline.includes('urgent')) {\n  score += 40;\n  scoreNotes.push('ASAP timeline (+40)');\n} else if (timeline.includes('month') || timeline.includes('soon')) {\n  score += 25;\n  scoreNotes.push('Short timeline (+25)');\n} else if (timeline.includes('1-3') || timeline.includes('few months')) {\n  score += 10;\n  scoreNotes.push('Medium timeline (+10)');\n} else {\n  score += 0;\n  scoreNotes.push('No timeline / just browsing (+0)');\n}\n\n// Service scoring\nconst service = (lead.service || '').toLowerCase();\nif (service.includes('hurricane') || service.includes('impact')) {\n  score += 30;\n  scoreNotes.push('Hurricane windows — high value (+30)');\n} else if (service.includes('full') || service.includes('whole') || service.includes('all')) {\n  score += 30;\n  scoreNotes.push('Full home replacement — high value (+30)');\n} else if (service.includes('energy') || service.includes('efficient')) {\n  score += 20;\n  scoreNotes.push('Energy efficient — medium value (+20)');\n} else if (service.includes('commercial')) {\n  score += 25;\n  scoreNotes.push('Commercial — high value (+25)');\n} else if (service.includes('single') || service.includes('one window')) {\n  score += 10;\n  scoreNotes.push('Single window — lower value (+10)');\n} else if (service.includes('repair')) {\n  score += 5;\n  scoreNotes.push('Repair — low value (+5)');\n} else {\n  score += 15;\n  scoreNotes.push('Service unclear (+15)');\n}\n\n// Contact info completeness\nif (lead.phone && lead.phone.length > 7) {\n  score += 15;\n  scoreNotes.push('Has phone (+15)');\n}\nif (lead.email && lead.email.includes('@')) {\n  score += 10;\n  scoreNotes.push('Has email (+10)');\n}\nif (lead.address && lead.address.length > 3) {\n  score += 5;\n  scoreNotes.push('Has address (+5)');\n}\n\n// Source scoring\nconst source = (lead.source || '').toLowerCase();\nif (source === 'chatbot') {\n  score += 5;\n  scoreNotes.push('Chatbot lead — self-qualified (+5)');\n} else if (source === 'form') {\n  score += 5;\n  scoreNotes.push('Form submission (+5)');\n}\n\n// Determine rating\nlet rating;\nif (score >= 70) rating = 'HOT';\nelse if (score >= 40) rating = 'WARM';\nelse rating = 'COLD';\n\n// Format timestamp\nconst now = new Date();\nconst timestamp = now.toLocaleString('en-US', { timeZone: 'America/New_York' });\n\nreturn [{\n  json: {\n    ...lead,\n    score,\n    rating,\n    scoreNotes: scoreNotes.join(' | '),\n    timestamp,\n    rowData: [\n      timestamp,\n      lead.name || '',\n      lead.phone || '',\n      lead.email || '',\n      lead.address || lead.city || '',\n      lead.service || '',\n      lead.timeline || '',\n      lead.source || 'website',\n      lead.notes || '',\n      score,\n      rating,\n      '', // Follow-up status (empty — filled by human)\n      '', // Call notes (empty — filled by human)\n      rating  // For conditional formatting column N\n    ]\n  }\n}];"
+      },
+      "id": "score-lead",
+      "name": "Score Lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "mode": "url",
+          "value": "YOUR_GOOGLE_SHEET_URL"
+        },
+        "sheetName": "Sheet1",
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {}
+        },
+        "options": {
+          "valueInputMode": "USER_ENTERED"
+        }
+      },
+      "id": "sheets-append",
+      "name": "Add to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [720, 200],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-cred",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.rating }}",
+              "operation": "equals",
+              "value2": "HOT"
+            }
+          ]
+        }
+      },
+      "id": "if-hot",
+      "name": "Is HOT Lead?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [720, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build Google Sheets row array\nconst d = $input.first().json;\nreturn [{ json: { values: [d.rowData] } }];"
+      },
+      "id": "build-row",
+      "name": "Build Row Array",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [600, 200]
+    },
+    {
+      "parameters": {
+        "fromEmail": "leads@tampabaywindowpros.github.io",
+        "toEmail": "YOUR_EMAIL@gmail.com",
+        "subject": "🔥 HOT LEAD — {{ $json.name }} — {{ $json.service }}",
+        "emailType": "html",
+        "html": "<h2>🔥 New HOT Lead!</h2><table style='border-collapse:collapse;width:100%'><tr><td style='padding:8px;border:1px solid #ddd;font-weight:bold'>Name</td><td style='padding:8px;border:1px solid #ddd'>{{ $json.name }}</td></tr><tr><td style='padding:8px;border:1px solid #ddd;font-weight:bold'>Phone</td><td style='padding:8px;border:1px solid #ddd'>{{ $json.phone }}</td></tr><tr><td style='padding:8px;border:1px solid #ddd;font-weight:bold'>Email</td><td style='padding:8px;border:1px solid #ddd'>{{ $json.email }}</td></tr><tr><td style='padding:8px;border:1px solid #ddd;font-weight:bold'>Service</td><td style='padding:8px;border:1px solid #ddd'>{{ $json.service }}</td></tr><tr><td style='padding:8px;border:1px solid #ddd;font-weight:bold'>City</td><td style='padding:8px;border:1px solid #ddd'>{{ $json.city }}</td></tr><tr><td style='padding:8px;border:1px solid #ddd;font-weight:bold'>Timeline</td><td style='padding:8px;border:1px solid #ddd'>{{ $json.timeline }}</td></tr><tr><td style='padding:8px;border:1px solid #ddd;font-weight:bold'>Score</td><td style='padding:8px;border:1px solid #ddd'>{{ $json.score }} / 100</td></tr><tr><td style='padding:8px;border:1px solid #ddd;font-weight:bold'>Source</td><td style='padding:8px;border:1px solid #ddd'>{{ $json.source }}</td></tr><tr><td style='padding:8px;border:1px solid #ddd;font-weight:bold'>Notes</td><td style='padding:8px;border:1px solid #ddd'>{{ $json.notes }}</td></tr></table><br><p><strong>Call within 1 hour for best close rate!</strong></p>"
+      },
+      "id": "email-hot",
+      "name": "Email HOT Alert",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [960, 320],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-cred",
+          "name": "SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"ok\", \"score\": {{ $('Score Lead').first().json.score }}, \"rating\": \"{{ $('Score Lead').first().json.rating }}\" }"
+      },
+      "id": "respond",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [960, 500]
+    }
+  ],
+  "connections": {
+    "Lead Webhook": {
+      "main": [[{ "node": "Score Lead", "type": "main", "index": 0 }]]
+    },
+    "Score Lead": {
+      "main": [
+        [
+          { "node": "Build Row Array", "type": "main", "index": 0 },
+          { "node": "Is HOT Lead?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Build Row Array": {
+      "main": [[{ "node": "Add to Google Sheets", "type": "main", "index": 0 }]]
+    },
+    "Is HOT Lead?": {
+      "main": [
+        [{ "node": "Email HOT Alert", "type": "main", "index": 0 }],
+        [{ "node": "Respond OK", "type": "main", "index": 0 }]
+      ]
+    },
+    "Email HOT Alert": {
+      "main": [[{ "node": "Respond OK", "type": "main", "index": 0 }]]
+    },
+    "Add to Google Sheets": {
+      "main": [[{ "node": "Respond OK", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "tags": [{ "name": "window-leads" }]
+}
