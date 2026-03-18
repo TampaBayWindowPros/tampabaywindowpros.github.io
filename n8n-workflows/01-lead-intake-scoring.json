@@ -1,0 +1,137 @@
+{
+  "name": "01 - Lead Intake & Scoring",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "window-lead",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook",
+      "name": "Lead Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const lead=$input.first().json;\nlet score=0;\nconst tl=(lead.timeline||'').toLowerCase();\nif(tl.includes('asap'))score+=40;\nelse if(tl.includes('month')&&!tl.includes('3'))score+=25;\nelse if(tl.includes('1-3'))score+=10;\nconst svc=(lead.service||'').toLowerCase();\nif(svc.includes('hurricane')||svc.includes('impact'))score+=30;\nelse if(svc.includes('full')||svc.includes('whole'))score+=30;\nelse if(svc.includes('energy'))score+=20;\nelse if(svc.includes('commercial'))score+=25;\nelse if(svc.includes('single'))score+=10;\nelse if(svc.includes('repair'))score+=5;\nelse score+=15;\nif(lead.phone?.length>7)score+=15;\nif(lead.email?.includes('@'))score+=10;\nif(lead.address?.length>3)score+=5;\nscore+=5;\nconst rating=score>=70?'HOT':score>=40?'WARM':'COLD';\nconst timestamp=new Date().toLocaleString('en-US',{timeZone:'America/New_York'});\nreturn [{json:{...lead,score,rating,timestamp}}];"
+      },
+      "id": "score",
+      "name": "Score Lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "mode": "url",
+          "value": "YOUR_GOOGLE_SHEET_URL"
+        },
+        "sheetName": "Sheet1",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Timestamp": "={{ $json.timestamp }}",
+            "Name": "={{ $json.name }}",
+            "Phone": "={{ $json.phone }}",
+            "Email": "={{ $json.email }}",
+            "Address/City": "={{ $json.address || $json.city }}",
+            "Service": "={{ $json.service }}",
+            "Timeline": "={{ $json.timeline }}",
+            "Source": "={{ $json.source || 'webhook' }}",
+            "Notes": "={{ $json.notes }}",
+            "Score": "={{ $json.score }}",
+            "Rating": "={{ $json.rating }}",
+            "Follow-Up Status": "",
+            "Call Notes": "",
+            "HOT/WARM/COLD": "={{ $json.rating }}"
+          }
+        },
+        "options": {
+          "valueInputMode": "USER_ENTERED"
+        }
+      },
+      "id": "sheets",
+      "name": "Add to Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        720,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-cred",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"status\":\"ok\",\"score\":{{ $('Score Lead').first().json.score }},\"rating\":\"{{ $('Score Lead').first().json.rating }}\"}"
+      },
+      "id": "respond",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        960,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Lead Webhook": {
+      "main": [
+        [
+          {
+            "node": "Score Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score Lead": {
+      "main": [
+        [
+          {
+            "node": "Add to Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add to Sheets": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "saveManualExecutions": true
+  },
+  "tags": [
+    {
+      "name": "window-leads"
+    }
+  ]
+}

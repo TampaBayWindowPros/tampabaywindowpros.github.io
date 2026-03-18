@@ -1,0 +1,171 @@
+{
+  "name": "04 - Social Content Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "id": "schedule",
+      "name": "Daily 9 AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const types=[{type:'tip',prompt:'Write a helpful Facebook/Instagram post for Tampa Bay homeowners about hurricane window preparation. 3-4 sentences. Conversational. End with soft CTA to comment.'},{type:'savings',prompt:'Write a post for Tampa Bay homeowners about energy efficient windows lowering electric bills. Mention 15-30% savings. Include a question.'},{type:'seasonal',prompt:'Write a timely post for Tampa Bay homeowners about preparing windows for hurricane season. Practical tips. 3-4 sentences.'},{type:'faq',prompt:'Write a post answering a common Tampa Bay homeowner question about window replacement cost, permits, timeline, or insurance discounts.'},{type:'social_proof',prompt:'Write a post in voice of a satisfied Tampa Bay homeowner who got new windows. First person, authentic, specific benefit. 3-4 sentences.'}];\nconst tags=['#TampaBay #HomeImprovement #Windows','#Tampa #HurricanePrep #FloridaHome','#StPete #HomeUpgrade #EnergyEfficient','#TampaBayArea #WindowReplacement #FloridaLiving'];\nconst t=types[new Date().getDay()%types.length];\nconst tag=tags[Math.floor(Math.random()*tags.length)];\nreturn [{json:{...t,hashtags:tag,date:new Date().toLocaleDateString()}}];"
+      },
+      "id": "pick",
+      "name": "Pick Post Type",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_GROQ_API_KEY"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": "={\"model\":\"meta-llama/llama-4-scout-17b-16e-instruct\",\"max_tokens\":300,\"messages\":[{\"role\":\"system\",\"content\":\"You write helpful authentic social media posts for Tampa Bay homeowner groups. Never sound like an ad. Sound like a helpful neighbor. Never mention company names. Educational first.\"},{\"role\":\"user\",\"content\":\"{{ $json.prompt }}\"}]}"
+      },
+      "id": "groq",
+      "name": "Generate Post",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        720,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const r=$input.first().json;\nconst m=$('Pick Post Type').first().json;\nconst text=r.choices[0].message.content.trim();\nconst post=`${text}\\n\\n${m.hashtags}`;\nreturn [{json:{type:m.type,date:m.date,post,char_count:post.length}}];"
+      },
+      "id": "format",
+      "name": "Format Post",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "mode": "url",
+          "value": "YOUR_GOOGLE_SHEET_URL"
+        },
+        "sheetName": "Social Queue",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Date": "={{ $json.date }}",
+            "Type": "={{ $json.type }}",
+            "Post Content": "={{ $json.post }}",
+            "Char Count": "={{ $json.char_count }}",
+            "Status": "READY \u2014 Post to Nextdoor/Instagram"
+          }
+        },
+        "options": {}
+      },
+      "id": "log",
+      "name": "Log to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        1200,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-cred",
+          "name": "Google Sheets"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily 9 AM": {
+      "main": [
+        [
+          {
+            "node": "Pick Post Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick Post Type": {
+      "main": [
+        [
+          {
+            "node": "Generate Post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Post": {
+      "main": [
+        [
+          {
+            "node": "Format Post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Post": {
+      "main": [
+        [
+          {
+            "node": "Log to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "saveManualExecutions": true
+  },
+  "tags": [
+    {
+      "name": "social-media"
+    }
+  ]
+}

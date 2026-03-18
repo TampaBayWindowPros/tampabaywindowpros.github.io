@@ -1,0 +1,198 @@
+{
+  "name": "05 - Chatbot AI Handler",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "window-chat",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "chat-webhook",
+      "name": "Chat Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "notes": "Receives messages from the chatbot on the website. API keys stay here in n8n — never in public code."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "Authorization", "value": "Bearer YOUR_GROQ_API_KEY" }
+          ]
+        },
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": "={\n  \"model\": \"meta-llama/llama-4-scout-17b-16e-instruct\",\n  \"max_tokens\": 300,\n  \"temperature\": 0.7,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a friendly, helpful assistant for Tampa Bay Window Pros, a window replacement company serving the Tampa Bay metro area in Florida.\\n\\nYour job is to have a natural conversation that qualifies leads by collecting the following information (ask one question at a time, naturally):\\n1. What type of window service they need (hurricane impact, energy efficient, repair, replacement, etc.)\\n2. How many windows / which part of the home\\n3. Their city/location in Tampa Bay\\n4. Their timeline (urgency)\\n5. Their name\\n6. Their phone number\\n7. Their email (optional but encouraged)\\n\\nBe warm, conversational, and helpful. Answer questions about windows, costs, and services honestly.\\nWhen asked about cost, give realistic ranges (single window $300-$800, whole home $8,000-$20,000, impact windows cost more).\\nMention that we offer free in-home estimates with no pressure.\\nKeep responses concise — 2-3 sentences max per reply.\\nOnce you have name + phone + service type, tell the user someone will call them within 24 hours and thank them.\\n\\nAt the END of your response, if you have collected name AND phone, include this on its own line:\\nLEAD_DATA:{\\\"name\\\":\\\"John Smith\\\",\\\"phone\\\":\\\"813-555-1234\\\",\\\"email\\\":\\\"john@email.com\\\",\\\"service\\\":\\\"Hurricane Windows\\\",\\\"city\\\":\\\"Tampa\\\",\\\"timeline\\\":\\\"ASAP\\\",\\\"notes\\\":\\\"Full home replacement\\\"}\\n\\nOnly include LEAD_DATA when you have at minimum: name and phone.\"\n    },\n    {{ JSON.stringify($json.messages) }}\n  ]\n}"
+      },
+      "id": "call-groq",
+      "name": "Call Groq AI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [480, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=YOUR_GEMINI_API_KEY",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": "={\n  \"contents\": [{ \"parts\": [{ \"text\": \"You are a helpful assistant for Tampa Bay Window Pros. Qualify the lead naturally. Conversation so far:\\n{{ $('Chat Webhook').first().json.messages.map(m => m.role + ': ' + m.content).join('\\n') }}\\nAssistant:\" }] }],\n  \"generationConfig\": { \"maxOutputTokens\": 300, \"temperature\": 0.7 }\n}"
+      },
+      "id": "call-gemini",
+      "name": "Call Gemini (Fallback)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [480, 440]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.choices !== undefined }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "groq-success",
+      "name": "Groq Succeeded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract reply from Groq or Gemini response\nconst groqData = $('Call Groq AI').first()?.json;\nconst geminiData = $('Call Gemini (Fallback)').first()?.json;\n\nlet rawReply = '';\nif (groqData?.choices?.[0]?.message?.content) {\n  rawReply = groqData.choices[0].message.content;\n} else if (geminiData?.candidates?.[0]?.content?.parts?.[0]?.text) {\n  rawReply = geminiData.candidates[0].content.parts[0].text;\n} else {\n  rawReply = 'Thanks for reaching out! Please call us at 727-265-1038 for immediate assistance.';\n}\n\n// Extract LEAD_DATA if present\nconst leadMatch = rawReply.match(/LEAD_DATA:(\\{.*\\})/);\nlet leadData = null;\nif (leadMatch) {\n  try { leadData = JSON.parse(leadMatch[1]); } catch(e) {}\n}\n\n// Clean reply\nconst reply = rawReply.replace(/LEAD_DATA:\\{.*\\}/, '').trim();\n\nreturn [{ json: { reply, leadData } }];"
+      },
+      "id": "extract-reply",
+      "name": "Extract Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.leadData }}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "id": "has-lead",
+      "name": "Has Lead Data?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1200, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Score the chatbot lead\nconst lead = $json.leadData;\nlet score = 0;\n\nconst tl = (lead.timeline || '').toLowerCase();\nif (tl.includes('asap')) score += 40;\nelse if (tl.includes('month') && !tl.includes('3')) score += 25;\nelse if (tl.includes('1-3')) score += 10;\n\nconst svc = (lead.service || '').toLowerCase();\nif (svc.includes('hurricane') || svc.includes('impact')) score += 30;\nelse if (svc.includes('full') || svc.includes('whole')) score += 30;\nelse if (svc.includes('energy')) score += 20;\nelse if (svc.includes('commercial')) score += 25;\nelse if (svc.includes('single')) score += 10;\nelse if (svc.includes('repair')) score += 5;\nelse score += 15;\n\nif (lead.phone?.length > 7) score += 15;\nif (lead.email?.includes('@')) score += 10;\nscore += 5; // chatbot bonus\n\nconst rating = score >= 70 ? 'HOT' : score >= 40 ? 'WARM' : 'COLD';\nconst timestamp = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });\n\nreturn [{ json: { ...lead, score, rating, timestamp, source: 'chatbot' } }];"
+      },
+      "id": "score-chatbot-lead",
+      "name": "Score Lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 200]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": { "mode": "url", "value": "YOUR_GOOGLE_SHEET_URL" },
+        "sheetName": "Sheet1",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Timestamp": "={{ $json.timestamp }}",
+            "Name": "={{ $json.name }}",
+            "Phone": "={{ $json.phone }}",
+            "Email": "={{ $json.email }}",
+            "Address/City": "={{ $json.city }}",
+            "Service": "={{ $json.service }}",
+            "Timeline": "={{ $json.timeline }}",
+            "Source": "=chatbot",
+            "Notes": "={{ $json.notes }}",
+            "Score": "={{ $json.score }}",
+            "Rating": "={{ $json.rating }}",
+            "Follow-Up Status": "",
+            "Call Notes": "",
+            "HOT/WARM/COLD": "={{ $json.rating }}"
+          }
+        },
+        "options": { "valueInputMode": "USER_ENTERED" }
+      },
+      "id": "save-to-sheets",
+      "name": "Save to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1680, 200],
+      "credentials": {
+        "googleSheetsOAuth2Api": { "id": "google-sheets-cred", "name": "Google Sheets" }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ reply: $('Extract Reply').first().json.reply, lead: $('Extract Reply').first().json.leadData }) }}"
+      },
+      "id": "respond",
+      "name": "Send Reply to Chat",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1680, 400]
+    }
+  ],
+  "connections": {
+    "Chat Webhook": {
+      "main": [
+        [
+          { "node": "Call Groq AI", "type": "main", "index": 0 },
+          { "node": "Call Gemini (Fallback)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Call Groq AI": {
+      "main": [[{ "node": "Groq Succeeded?", "type": "main", "index": 0 }]]
+    },
+    "Groq Succeeded?": {
+      "main": [
+        [{ "node": "Extract Reply", "type": "main", "index": 0 }],
+        [{ "node": "Extract Reply", "type": "main", "index": 0 }]
+      ]
+    },
+    "Extract Reply": {
+      "main": [[{ "node": "Has Lead Data?", "type": "main", "index": 0 }]]
+    },
+    "Has Lead Data?": {
+      "main": [
+        [{ "node": "Score Lead", "type": "main", "index": 0 }],
+        [{ "node": "Send Reply to Chat", "type": "main", "index": 0 }]
+      ]
+    },
+    "Score Lead": {
+      "main": [[{ "node": "Save to Google Sheets", "type": "main", "index": 0 }]]
+    },
+    "Save to Google Sheets": {
+      "main": [[{ "node": "Send Reply to Chat", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "saveManualExecutions": true },
+  "tags": [{ "name": "window-leads" }]
+}

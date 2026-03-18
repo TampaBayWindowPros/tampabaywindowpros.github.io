@@ -1,0 +1,170 @@
+{
+  "name": "03 - Reddit Content Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        }
+      },
+      "id": "schedule",
+      "name": "Every 6 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const subs=[{sub:'tampa',topics:['home improvement','hurricane prep','windows','energy bill']},{sub:'StPetersburg',topics:['home improvement','hurricane','windows']},{sub:'Bradenton',topics:['home improvement','hurricane prep','windows']},{sub:'Wesley_Chapel',topics:['home improvement','new home','windows']}];\nconst s=subs[Math.floor(Math.random()*subs.length)];\nconst topic=s.topics[Math.floor(Math.random()*s.topics.length)];\nreturn [{json:{subreddit:s.sub,topic}}];"
+      },
+      "id": "pick",
+      "name": "Pick Subreddit",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_GROQ_API_KEY"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": "={\"model\":\"meta-llama/llama-4-scout-17b-16e-instruct\",\"max_tokens\":200,\"messages\":[{\"role\":\"system\",\"content\":\"You are a helpful Tampa Bay homeowner. Write a genuine helpful Reddit comment for r/{{ $json.subreddit }} about {{ $json.topic }}. Rules: helpful not salesy, real person voice, 3-5 sentences, no hashtags, no emojis, never mention company names. Just the comment text.\"},{\"role\":\"user\",\"content\":\"Write the comment now.\"}]}"
+      },
+      "id": "groq",
+      "name": "Generate Comment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        720,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const r=$input.first().json;\nconst m=$('Pick Subreddit').first().json;\nconst comment=r.choices[0].message.content.trim();\nreturn [{json:{subreddit:m.subreddit,topic:m.topic,comment,date:new Date().toLocaleDateString()}}];"
+      },
+      "id": "extract",
+      "name": "Extract Comment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "mode": "url",
+          "value": "YOUR_GOOGLE_SHEET_URL"
+        },
+        "sheetName": "Reddit Queue",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Date": "={{ $json.date }}",
+            "Subreddit": "=r/{{ $json.subreddit }}",
+            "Topic": "={{ $json.topic }}",
+            "Comment": "={{ $json.comment }}",
+            "Status": "PENDING \u2014 Post Manually"
+          }
+        },
+        "options": {}
+      },
+      "id": "log",
+      "name": "Log to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        1200,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-cred",
+          "name": "Google Sheets"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every 6 Hours": {
+      "main": [
+        [
+          {
+            "node": "Pick Subreddit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick Subreddit": {
+      "main": [
+        [
+          {
+            "node": "Generate Comment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Comment": {
+      "main": [
+        [
+          {
+            "node": "Extract Comment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Comment": {
+      "main": [
+        [
+          {
+            "node": "Log to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "saveManualExecutions": true
+  },
+  "tags": [
+    {
+      "name": "social-media"
+    }
+  ]
+}
